@@ -1,0 +1,2 @@
+Correct letters and cells color when in dark mode
+some words (noms propres for example), are not found so cannot be guesses (canadian)

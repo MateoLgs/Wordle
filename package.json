@@ -1,0 +1,28 @@
+{
+  "name": "WordleMobileJS",
+  "version": "1.0.0",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~5.0.4",
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "expo": "53.0.0",
+    "expo-file-system": "~15.3.0",
+    "expo-system-ui": "~5.0.8",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-native": "0.79.2",
+    "react-native-confetti-cannon": "^1.5.2",
+    "react-native-web": "0.20.0",
+    "react-native-safe-area-context": "5.4.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.12.9"
+  }
+}
