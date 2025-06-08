@@ -1,63 +1,44 @@
-// wordUtils.js
+// utils/wordUtils.js
 
-import { STATUS } from './constants';
-
-/**
- * Strip accents/diacritics from a string (for accent-insensitive matching)
- * Example: "éèçàü" → "eecaü"
- */
+// Remove accents for comparison
 export function stripAccents(str) {
-  if (typeof str !== 'string') return str;
-  // Handles most Latin accents, keeps casing
+  if (!str) return '';
   return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
-/**
- * Build a Set of normalized (accent-insensitive, UPPERCASE) words from a word bank.
- * This lets you check for word validity in O(1) time, even for large banks.
- * @param {Array} wordBank - Array of objects with a .word property
- * @returns {Set<string>}
- */
-export function buildNormalizedWordSet(wordBank) {
-  return new Set(
-    wordBank.map(e => stripAccents(e.word).toUpperCase())
-  );
+// Build a normalized set of all words in the local word bank
+export function buildNormalizedWordSet(bank) {
+  const set = new Set();
+  bank.forEach(entry => {
+    set.add(stripAccents(entry.word).toUpperCase());
+    set.add(entry.word.toUpperCase());
+  });
+  return set;
 }
 
-/**
- * Returns a fallback target word if none loaded.
- */
-export function getTargetWord() {
-  return 'REACT';
-}
-
-/**
- * Compare a guess to the target and return an array of STATUS values per letter.
- * Used for coloring tiles.
- * @param {string} guess
- * @param {string} target
- * @returns {Array<string>} (STATUS array)
- */
+// Evaluate guess: returns array of STATUS for each letter
 export function evaluateGuess(guess, target) {
-  const length = Math.max(guess.length, target.length);
-  const result = Array(length).fill(STATUS.ABSENT);
-  const targetLetters = target.split('');
+  // Both guess and target must be uppercase, no accents
+  const result = Array(target.length).fill('absent');
+  const used = Array(target.length).fill(false);
 
-  // First pass: mark exact matches (green)
-  for (let i = 0; i < length; i++) {
+  // First pass: correct positions
+  for (let i = 0; i < target.length; ++i) {
     if (guess[i] === target[i]) {
-      result[i] = STATUS.CORRECT;
-      targetLetters[i] = null; // Consume this letter
+      result[i] = 'correct';
+      used[i] = true;
     }
   }
 
-  // Second pass: mark present but wrong spot (yellow)
-  for (let i = 0; i < length; i++) {
-    if (result[i] === STATUS.CORRECT) continue;
-    const idx = targetLetters.indexOf(guess[i]);
-    if (idx !== -1) {
-      result[i] = STATUS.PRESENT;
-      targetLetters[idx] = null; // Consume
+  // Second pass: present (right letter, wrong place)
+  for (let i = 0; i < target.length; ++i) {
+    if (result[i] === 'correct') continue;
+    for (let j = 0; j < target.length; ++j) {
+      if (!used[j] && guess[i] === target[j]) {
+        result[i] = 'present';
+        used[j] = true;
+        break;
+      }
     }
   }
 
@@ -65,48 +46,66 @@ export function evaluateGuess(guess, target) {
 }
 
 /**
- * Basic guess validation (for UI entry) — extend as needed.
- * (e.g., you may want to enforce length or valid alphabet)
+ * Validate a word:
+ * - Accept immediately if in local normalized word set
+ * - Otherwise, for EN: use DictionaryAPI
+ * - For FR/ES/CZ: use LanguageTool API for spellcheck
+ * - If network error (simulated or real), call onNetworkError callback if provided
+ *
+ * @param {string} word
+ * @param {Set} normalizedSet - Set of local words (uppercase, accent-stripped)
+ * @param {string} lang - 'en', 'fr', 'es', or 'cz'
+ * @param {boolean} simulateNetworkError
+ * @param {function} onNetworkError
+ * @returns {Promise<boolean>} true if valid, false otherwise
  */
-export function isValidGuess(guess, length = 5) {
-  return typeof guess === 'string' && guess.length === length;
-}
+export async function validateWord(word, normalizedSet, lang, simulateNetworkError = false, onNetworkError) {
+  // Normalize input
+  const stripped = stripAccents(word).toUpperCase();
 
+  // Accept any word in the local set (fast path)
+  if (normalizedSet.has(stripped) || normalizedSet.has(word.toUpperCase())) {
+    return true;
+  }
 
-export async function validateWord(guess, normalizedSet, lang) {
-  // Use normalizedSet for accent-insensitive, fast local check
-  const norm = stripAccents(guess).toUpperCase();
-  if (normalizedSet && normalizedSet.has(norm)) return true;
+  // Simulate a network error (dev tool)
+  if (simulateNetworkError) {
+    if (onNetworkError) onNetworkError();
+    return false;
+  }
 
   // DictionaryAPI for English
   if (lang === 'en') {
     try {
-      const r = await fetch(
-        `https://api.dictionaryapi.dev/api/v2/entries/en/${norm.toLowerCase()}`
-      );
-      return r.ok;
-    } catch {
+      const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word.toLowerCase()}`);
+      if (!res.ok) throw new Error("Network or word not found");
+      const data = await res.json();
+      return Array.isArray(data) && data.length > 0;
+    } catch (err) {
+      if (onNetworkError) onNetworkError();
       return false;
     }
   }
 
-  // LanguageTool for FR/ES/CZ
+  // LanguageTool API for FR/ES/CZ
   if (['fr', 'es', 'cz'].includes(lang)) {
-    const lt = lang === 'cz' ? 'cs' : lang;
-    const body = `text=${encodeURIComponent(guess)}&language=${lt}`;
     try {
-      const r = await fetch('https://api.languagetool.org/v2/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-      });
-      if (!r.ok) return false;
-      const { matches } = await r.json();
-      return !matches.some(m => m.rule.issueType === 'misspelling');
-    } catch {
+      const res = await fetch(
+        `https://api.languagetool.org/v2/check?language=${lang}&text=${word}`
+      );
+      if (!res.ok) throw new Error("Network or word not found");
+      const data = await res.json();
+      // If no spelling mistakes, accept
+      const hasSpellingMistake = data.matches.some(
+        m => m.rule.issueType === "misspelling"
+      );
+      return !hasSpellingMistake;
+    } catch (err) {
+      if (onNetworkError) onNetworkError();
       return false;
     }
   }
 
+  // Fallback: Not valid
   return false;
 }

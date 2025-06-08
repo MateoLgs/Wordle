@@ -272,7 +272,7 @@ export default function Board({ guesses, currentGuess, shakeTrigger, wordLength,
 
 const styles = StyleSheet.create({
   board: {
-    marginTop: 50,
+    marginTop: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },

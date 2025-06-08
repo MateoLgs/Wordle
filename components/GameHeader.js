@@ -1,40 +1,56 @@
-// components/GameHeader.js
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, useColorScheme } from 'react-native';
+import DevPanel from './DevPanel';
 
 export default function GameHeader({
   onGoHome,
-  onResetPoints,
-  onReveal,
-  reveal,
-  target,
-  showReset,
-  showReveal,
   modeLabel,
   theme,
-  setTheme
+  setTheme,
+  onDevResetPoints,
+  onDevRevealAnswer,
+  onDevAutofillBoard,
+  onDevForceLose,
+  onDevRestart,
+  onAutoWin6,
+  onSimulateNetworkError,
 }) {
   const systemColorScheme = useColorScheme();
   const isDark = (theme === 'system' ? systemColorScheme : theme) === 'dark';
 
   return (
     <View style={[styles.headerBar, { backgroundColor: isDark ? '#000' : '#f7faff' }]}>
+      {/* Home */}
       <TouchableOpacity style={styles.headerBtn} onPress={onGoHome}>
         <Text style={styles.headerIcon}>🏠</Text>
       </TouchableOpacity>
-      {showReset && (
-        <TouchableOpacity style={styles.headerBtn} onPress={onResetPoints}>
-          <Text style={styles.headerIcon}>🔄</Text>
-        </TouchableOpacity>
-      )}
-      {showReveal && (
-        <TouchableOpacity style={styles.headerBtn} onPress={onReveal}>
-          <Text style={styles.headerText}>{reveal ? target : 'Answer'}</Text>
-        </TouchableOpacity>
-      )}
+
+      {/* Spacer */}
+      <View style={{ flex: 1 }} />
+
+      {/* Mode pill */}
       <View style={styles.modePill}>
         <Text style={styles.modePillText}>{modeLabel}</Text>
       </View>
+
+      {/* Spacer */}
+      <View style={{ flex: 1 }} />
+
+      {/* DevPanel button (no absolute/relative, just a normal icon) */}
+      {__DEV__ && (
+        <DevPanel
+          onDevResetPoints={onDevResetPoints}
+          onDevRevealAnswer={onDevRevealAnswer}
+          onDevAutofillBoard={onDevAutofillBoard}
+          onDevForceLose={onDevForceLose}
+          onDevRestart={onDevRestart}
+          onAutoWin6={onAutoWin6}
+          onSimulateNetworkError={onSimulateNetworkError}
+          inline
+        />
+      )}
+
+      {/* Theme toggle */}
       <TouchableOpacity
         style={styles.headerBtn}
         onPress={() =>
@@ -56,10 +72,9 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 10,
     height: 54,
-    marginTop: 30,
+    marginTop: 0,
     borderBottomWidth: 1,
     borderColor: '#e5e5e5',
   },
@@ -73,7 +88,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#e9eef5',
   },
   headerIcon: { fontSize: 22 },
-  headerText: { fontSize: 16, fontWeight: 'bold', color: '#3577f2' },
   modePill: {
     backgroundColor: '#53b4ff',
     borderRadius: 13,
@@ -87,6 +101,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 13.5,
     letterSpacing: 1.1,
-    color: '#fff'
+    color: '#fff',
   },
 });
