@@ -1,13 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   SafeAreaView,
   View,
   Text,
   TouchableOpacity,
-  Modal,
   Animated,
   Dimensions,
-  Platform,
   StyleSheet,
   useColorScheme,
   ScrollView,
@@ -19,11 +17,13 @@ import {
   getSynonymsLocal,
   getDefinitionLocal
 } from '../utils/gameLogic';
-import AnimatedModal from '../components/AnimatedModal';
+import { useGameTimer } from '../hooks/useGameTimer';
 
 import Board from '../components/Board'
 import Keyboard from '../components/Keyboard'
 import GameHeader from '../components/GameHeader'
+import EndgameModal from '../components/EndgameModal'
+import HintModal from '../components/HintModal'
 import {
   evaluateGuess,
   stripAccents,
@@ -36,17 +36,14 @@ import ConfettiCannon from 'react-native-confetti-cannon'
 
 const POINTS_KEY = '@totalPoints'
 
-// --- OFFLINE DETERMINISTIC WOTD WORD ---
 function getDailyWordForBank(bank) {
   if (!bank.length) return '';
-  // Days since Jan 1, 2020
   const now = new Date();
   const start = new Date(2020, 0, 1);
   const daysSince = Math.floor((now - start) / (1000 * 60 * 60 * 24));
   const index = daysSince % bank.length;
   return bank[index].word.toUpperCase();
 }
-
 function getTodayKey(lang) {
   const today = new Date();
   const y = today.getFullYear();
@@ -55,68 +52,73 @@ function getTodayKey(lang) {
   return `@wotd-${lang}-${y}-${m}-${d}`;
 }
 
-
-
-const modalStyles = StyleSheet.create({
-  overlay:   { flex:1, backgroundColor:'rgba(0,0,0,0.5)', justifyContent:'center', alignItems:'center' },
-  container: { width:'80%', borderRadius:10, padding:16 },
-  title:     { fontSize:18, fontWeight:'bold', marginBottom:12, textAlign:'center' },
-  content:   { marginBottom:12 },
-  text:      { fontSize:16, marginBottom:8 },
-  closeBtn:  { alignSelf:'center', backgroundColor:'#4a90e2', paddingVertical:8, paddingHorizontal:24, borderRadius:6, marginTop:8 },
-  closeTxt:  { color:'#fff', fontWeight:'bold', fontSize:16 },
-})
-
 export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 'system', setTheme }) {
   const systemColorScheme = useColorScheme();
   const activeTheme = theme === 'system' ? systemColorScheme : theme;
   const isDark = activeTheme === 'dark';
 
-  // --- Normal state ---
-  const [bank, setBank]                     = useState([])
-  const [normalizedSet, setNormalizedSet]   = useState(new Set())
-  const [target, setTarget]                 = useState('')
-  const [guesses, setGuesses]               = useState([])
-  const [current, setCurrent]               = useState('')
-  const [statuses, setStatuses]             = useState({})
-  const [shake, setShake]                   = useState(0)
-  const [gameOver, setGameOver]             = useState(false)
-  const [penalties, setPenalties]           = useState(0)
-  const [synonymsUsed, setSynonymsUsed]     = useState(false)
+
+  const [bank, setBank]                   = useState([])
+  const [normalizedSet, setNormalizedSet] = useState(new Set())
+  const [target, setTarget]               = useState('')
+  const [guesses, setGuesses]             = useState([])
+  const [current, setCurrent]             = useState('')
+  const [statuses, setStatuses]           = useState({})
+  const [shake, setShake]                 = useState(0)
+  const [gameOver, setGameOver]           = useState(false)
+  const [penalties, setPenalties]         = useState(0)
+  const [synonymsUsed, setSynonymsUsed]   = useState(false)
   const [definitionUsed, setDefinitionUsed] = useState(false)
 
-  const [synonymsList, setSynonymsList]     = useState([])
+  const [synonymsList, setSynonymsList]   = useState([])
   const [definitionText, setDefinitionText] = useState('')
-  const [showSynModal, setShowSynModal]     = useState(false)
-  const [showDefModal, setShowDefModal]     = useState(false)
+  const [showSynModal, setShowSynModal]   = useState(false)
+  const [showDefModal, setShowDefModal]   = useState(false)
 
-  const [showEndModal, setShowEndModal]     = useState(false)
-  const [endMsg, setEndMsg]                 = useState('')
-  const [lastScore, setLastScore]           = useState(null)
-
-  const [reveal, setReveal]      = useState(false)
-  const [confetti, setConfetti] = useState(false)
-  const [validating, setValidating] = useState(false)
-  const [totalPoints, setTotalPoints] = useState(0)
+  const [showEndModal, setShowEndModal]   = useState(false)
+  const [endMsg, setEndMsg]               = useState('')
+  const [lastScore, setLastScore]         = useState(null)
+  const [reveal, setReveal]               = useState(false)
+  const [confetti, setConfetti]           = useState(false)
+  const [validating, setValidating]       = useState(false)
+  const [totalPoints, setTotalPoints]     = useState(0)
   const [simulateNetworkError, setSimulateNetworkError] = useState(false);
   const [networkErrorDetected, setNetworkErrorDetected] = useState(false);
 
-  // --- Word of the Day only ---
-  const [wotdLoaded, setWotdLoaded] = useState(false);
+  const [wotdLoaded, setWotdLoaded]       = useState(false);
   const [wotdCompleted, setWotdCompleted] = useState(false);
 
-  // --- Popup/confetti only on fresh win ---
-  const [freshWin, setFreshWin] = useState(false);
+  const [freshWin, setFreshWin]           = useState(false);
+  const [wordCount, setWordCount]         = useState(1);
 
-  // --- Timed mode ---
-  const [timeLeft, setTimeLeft] = useState(60); // 60 seconds for timed mode
-  const timerRef = useRef();
+  // DevPanel open/close state
+  const [showDevPanel, setShowDevPanel] = useState(false);
 
-  // Responsive: 95% width
+  // Timer
+  const onTimeout = useCallback(() => {
+    setEndMsg(`⏰ Time's up!\nWords finished: ${totalPoints}`);
+    setGameOver(true);
+    setShowEndModal(true);
+    setTotalPoints(0); // RESET POINTS ON TIMEOUT!
+    AsyncStorage.setItem(POINTS_KEY, '0');
+  }, [totalPoints]);
+  const INITIAL_SECONDS = 60; // or 60, but use a variable for flexibility!
+// Calculate unlock thresholds based on initial time
+  const synonymsUnlockAt = Math.round(INITIAL_SECONDS * 0.35); // After 65% elapsed (so when timeLeft <= this)
+  const definitionUnlockAt = Math.round(INITIAL_SECONDS * 0.20); // After 80% elapsed (so when timeLeft <= this)
+  const [timeLeft] = useGameTimer({
+    mode: gameMode,
+    isActive: !gameOver,
+    initialSeconds: INITIAL_SECONDS,
+    onTimeout,
+  });
+
+
   const { width } = Dimensions.get('window')
   const containerWidth = width * 0.95;
   const tileSize   = target.length ? containerWidth / target.length : 48;
 
+  // Load persisted points on mount
   useEffect(() => {
     AsyncStorage.getItem(POINTS_KEY).then(v => {
       if (v != null) setTotalPoints(parseInt(v,10))
@@ -125,15 +127,9 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
   const resetPoints = async () => {
     setTotalPoints(0)
     await AsyncStorage.setItem(POINTS_KEY, '0')
+    setShowDevPanel(false)
   }
 
-  const addPoints = async pts => {
-    const nt = totalPoints + pts
-    setTotalPoints(nt)
-    await AsyncStorage.setItem(POINTS_KEY, String(nt))
-  }
-
-  // --- SETUP GAME DATA ---
   useEffect(() => {
     setWotdLoaded(false);
     setWotdCompleted(false);
@@ -145,23 +141,17 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
     if (gameMode !== "wordofday") {
       if (b.length) setTarget(b[Math.floor(Math.random()*b.length)].word.toUpperCase());
       setGuesses([]); setCurrent(''); setStatuses({});
-      setGameOver(false); setShowEndModal(false);
+      setShowEndModal(false);
       setLastScore(null); setReveal(false);
       setPenalties(0); setSynonymsUsed(false); setDefinitionUsed(false);
       setConfetti(false); setNetworkErrorDetected(false);
       setFreshWin(false);
       setWotdLoaded(true);
-      // Timed: Reset timer if not in timed mode
-      if (gameMode !== "timed") {
-        clearInterval(timerRef.current);
-        setTimeLeft(60);
-      }
       return;
     }
 
     // --- Word of the Day (OFFLINE DETERMINISTIC) ---
     const todayKey = getTodayKey(currentLanguage);
-
     AsyncStorage.getItem(todayKey).then(async stored => {
       if (stored) {
         try {
@@ -198,37 +188,6 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
     });
   }, [currentLanguage, gameMode]);
 
-  // --- PATCH: Timer logic for Timed mode ---
-  useEffect(() => {
-    if (gameMode !== "timed") {
-      clearInterval(timerRef.current);
-      setTimeLeft(60);
-      return;
-    }
-    setTimeLeft(60);
-    clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => {
-      setTimeLeft(t => {
-        if (t <= 1) {
-          clearInterval(timerRef.current);
-          setEndMsg("⏰ Time's up!");
-          setGameOver(true);
-          setFreshWin(true);
-          return 0;
-        }
-        return t - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timerRef.current);
-  }, [gameMode, target]);
-
-  // Stop timer on win/lose
-  useEffect(() => {
-    if (!gameOver) return;
-    clearInterval(timerRef.current);
-  }, [gameOver]);
-
-  // Show confetti/modal only on fresh win
   useEffect(() => {
     if (!gameOver) return;
     if (!freshWin) return;
@@ -241,13 +200,10 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
     return () => clearTimeout(timer);
   }, [gameOver, endMsg, freshWin]);
 
-
-
   const rowVal     = NUM_ROWS - guesses.length
   const synPenalty = synonymsUsed   ? 0 : 4 * rowVal * rowVal
   const defPenalty = definitionUsed ? 0 : 2 * rowVal * rowVal
 
-  // --- Hint handlers: LOCAL ONLY (never fetch online) ---
   const handleSynonymsPress = async () => {
     setShowSynModal(true);
     if (!synonymsUsed && gameMode !== "freeplay" && gameMode !== "wordofday") {
@@ -304,10 +260,43 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
       setStatuses(s => mergeLetterStatuses(s, entry))
       setCurrent('')
       let isWin = sts.every(s => s === STATUS.CORRECT);
-      let finalMsg = isWin ? '🎉 You win!' : '';
+
+      // --- TIMED MODE POINTS HANDLING ---
+      if (gameMode === "timed") {
+        if (isWin) {
+          setTimeout(() => {
+            setTotalPoints(tp => {
+              const pts = tp + 1;
+              AsyncStorage.setItem(POINTS_KEY, String(pts));
+              return pts;
+            });
+            setWordCount(wc => wc + 1);
+            if (bank.length) setTarget(bank[Math.floor(Math.random() * bank.length)].word.toUpperCase());
+            setGuesses([]); setCurrent(''); setStatuses({});
+            setLastScore(null); setReveal(false);
+            setPenalties(0); setSynonymsUsed(false); setDefinitionUsed(false);
+            setConfetti(false); setNetworkErrorDetected(false);
+            setFreshWin(false);
+            setValidating(false);
+          }, 1200);
+          return;
+        } else if (newG.length === NUM_ROWS) {
+          setTimeout(() => {
+            setEndMsg(`😞 You lose\nWords found: ${totalPoints}`);
+            setGameOver(true);
+            setShowEndModal(true);
+            setTotalPoints(0);
+            AsyncStorage.setItem(POINTS_KEY, "0");
+          }, 1200);
+          return;
+        }
+      }
+
+
+      // --- Other modes: normal win/lose and popup ---
       if (isWin) {
         setLastScore(null)
-        setEndMsg(finalMsg)
+        setEndMsg('🎉 You win!')
         setGameOver(true)
         setFreshWin(true)
       } else if (newG.length === NUM_ROWS) {
@@ -337,261 +326,132 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
   }
 
   const handleRestart = () => {
-    if (gameMode === "wordofday" && wotdCompleted) return;
-    const idx = Math.floor(Math.random() * bank.length)
-    setTarget(bank[idx].word.toUpperCase())
+    setWordCount(1);
+    setTotalPoints(0); // Points reset only on full restart!
+    AsyncStorage.setItem(POINTS_KEY, '0');
+    setGameOver(false);
+    setShowEndModal(false);
+    if (bank.length) setTarget(bank[Math.floor(Math.random() * bank.length)].word.toUpperCase());
     setGuesses([]); setCurrent(''); setStatuses({})
-    setGameOver(false); setShowEndModal(false)
     setLastScore(null); setReveal(false)
     setPenalties(0); setSynonymsUsed(false); setDefinitionUsed(false)
     setConfetti(false)
     setNetworkErrorDetected(false);
     setFreshWin(false);
-    if (gameMode === "timed") {
-      setTimeLeft(60);
-      clearInterval(timerRef.current);
-      timerRef.current = setInterval(() => {
-        setTimeLeft(t => {
-          if (t <= 1) {
-            clearInterval(timerRef.current);
-            setEndMsg("⏰ Time's up!");
-            setGameOver(true);
-            setFreshWin(true);
-            return 0;
-          }
-          return t - 1;
-        });
-      }, 1000);
-    }
   }
 
-  // --- DEV PANEL HELPERS ---
-
-  // Reset Word of the Day for dev
-
-const devResetWOTD = async () => {
-
-  if (gameMode !== "wordofday") return;
-
-  const todayKey = getTodayKey(currentLanguage);
-
-  await AsyncStorage.removeItem(todayKey);
-
-  setWotdCompleted(false);
-
-  setShowEndModal(false);
-
-  setGameOver(false);
-
-  setFreshWin(false);
-
-  const b = ALL_WORD_BANKS[currentLanguage] || [];
-
-  const word = getDailyWordForBank(b);
-
-  setTarget(word);
-
-  setGuesses([]); setCurrent(''); setStatuses({});
-
-  setLastScore(null); setReveal(false);
-
-  setPenalties(0); setSynonymsUsed(false); setDefinitionUsed(false);
-
-  setConfetti(false); setNetworkErrorDetected(false);
-
-  setWotdCompleted(false);
-
-  setWotdLoaded(true);
-
-};
-
-
-
-
-
+  // --- Dev helpers ---
   const devAutofillBoard = () => {
-
     if (!bank.length) return;
-
     const fillerWords = bank
-
       .map(w => w.word.toUpperCase())
-
       .filter(w => w !== target)
-
       .slice(0, NUM_ROWS - 1);
-
-
-
     const entries = fillerWords.map(word => {
-
       const gNorm = stripAccents(word).toUpperCase();
-
       const tNorm = stripAccents(target).toUpperCase();
-
       const sts = evaluateGuess(gNorm, tNorm);
-
       return { letters: word.split(''), statuses: sts };
-
     });
-
-
-
     const allStatuses = entries.reduce((acc, e) => mergeLetterStatuses(acc, e), {});
-
     setGuesses(entries);
-
     setStatuses(allStatuses);
-
     setCurrent('');
-
     setGameOver(false);
-
     setEndMsg('');
-
     setLastScore(null);
-
     setShowEndModal(false);
-
     setFreshWin(false);
-
+    setShowDevPanel(false);
   };
-
-
-
   const devAutoWin6 = () => {
-
     if (!bank.length) return;
-
     const fillerWords = bank
-
       .map(w => w.word.toUpperCase())
-
       .filter(w => w !== target)
-
       .slice(0, NUM_ROWS - 1);
-
-
-
     const entries = fillerWords.map(word => {
-
       const gNorm = stripAccents(word).toUpperCase();
-
       const tNorm = stripAccents(target).toUpperCase();
-
       const sts = evaluateGuess(gNorm, tNorm);
-
       return { letters: word.split(''), statuses: sts };
-
     });
-
-
-
     const winEntry = {
-
       letters: target.split(''),
-
       statuses: Array(target.length).fill(STATUS.CORRECT)
-
     };
-
-
-
     const finalGuesses = [...entries, winEntry];
-
     const allStatuses = finalGuesses.reduce((acc, e) => mergeLetterStatuses(acc, e), {});
-
     setGuesses(finalGuesses);
-
     setStatuses(allStatuses);
-
     setCurrent('');
-
     setGameOver(true);
-
     setEndMsg('🎉 Auto Win');
-
     setLastScore(0);
-
     setShowEndModal(true);
-
     setFreshWin(false);
-
+    setShowDevPanel(false);
   };
-
-
-
   const devForceLose = () => {
-
     if (!bank.length) return;
-
     const wrongs = bank
-
       .map(w => w.word.toUpperCase())
-
       .filter(w => w !== target)
-
       .slice(0, NUM_ROWS);
-
     const entries = wrongs.map(word => {
-
       const gNorm = stripAccents(word).toUpperCase();
-
       const tNorm = stripAccents(target).toUpperCase();
-
       const sts = evaluateGuess(gNorm, tNorm);
-
       return { letters: word.split(''), statuses: sts }
-
     }).slice(0, NUM_ROWS);
-
-
-
     const allStatuses = entries.reduce((acc, e) => mergeLetterStatuses(acc, e), {});
-
     setGuesses(entries);
-
     setStatuses(allStatuses);
-
     setCurrent('');
-
     setGameOver(true);
-
     setEndMsg('😞 Auto Lose');
-
     setLastScore(0);
-
     setShowEndModal(true);
-
     setFreshWin(false);
-
+    setShowDevPanel(false);
   };
-
-
-
   const devRevealAnswer = () => {
-
     setReveal(true)
-
     Alert.alert('Answer', target)
-
+    setShowDevPanel(false);
+  };
+  const devRestart = () => {
+    handleRestart();
+    setShowDevPanel(false);
+  };
+  const devSimulateNetworkError = () => {
+    setSimulateNetworkError(x => !x);
+    setShowDevPanel(false);
+  };
+  const devResetWOTD = async () => {
+    if (gameMode !== "wordofday") return;
+    const todayKey = getTodayKey(currentLanguage);
+    await AsyncStorage.removeItem(todayKey);
+    setWotdCompleted(false);
+    setShowEndModal(false);
+    setGameOver(false);
+    setFreshWin(false);
+    const b = ALL_WORD_BANKS[currentLanguage] || [];
+    const word = getDailyWordForBank(b);
+    setTarget(word);
+    setGuesses([]); setCurrent(''); setStatuses({});
+    setLastScore(null); setReveal(false);
+    setPenalties(0); setSynonymsUsed(false); setDefinitionUsed(false);
+    setConfetti(false); setNetworkErrorDetected(false);
+    setWotdCompleted(false);
+    setWotdLoaded(true);
+    setShowDevPanel(false);
+  };
+  const devResetPointsWrapped = async () => {
+    await resetPoints();
+    setShowDevPanel(false);
   }
 
-
-
-  const devRestart = () => {
-
-    handleRestart();
-
-  };
-
-
-
-  const devSimulateNetworkError = () => {
-
-    setSimulateNetworkError(x => !x);
-
-  };
   const modeLabel = (
     gameMode === "freeplay" ? "Freeplay" :
     gameMode === "timed" ? "Timed" :
@@ -609,13 +469,12 @@ const devResetWOTD = async () => {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#000000' : '#fff' }]}>
-      {/* HEADER BAR */}
       <GameHeader
         onGoHome={onGoHome}
         modeLabel={modeLabel}
         theme={theme}
         setTheme={setTheme}
-        onDevResetPoints={resetPoints}
+        onDevResetPoints={devResetPointsWrapped}
         onDevRevealAnswer={devRevealAnswer}
         onDevAutofillBoard={devAutofillBoard}
         onDevForceLose={devForceLose}
@@ -623,9 +482,10 @@ const devResetWOTD = async () => {
         onAutoWin6={devAutoWin6}
         onSimulateNetworkError={devSimulateNetworkError}
         onDevResetWOTD={devResetWOTD}
+        showDevPanel={showDevPanel}
+        setShowDevPanel={setShowDevPanel}
       />
 
-      {/* PATCH: Timer display for Timed mode */}
       {gameMode === "timed" && (
         <View style={{ alignItems: 'center', marginTop: 10 }}>
           <Text style={{
@@ -634,11 +494,18 @@ const devResetWOTD = async () => {
             fontSize: 22,
             letterSpacing: 2
           }}>
-            {timeLeft}s
+            {timeLeft}s  
           </Text>
         </View>
       )}
 
+      {gameMode === "timed" && (
+        <View style={styles.pointsFloatBox}>
+          <Text style={styles.pointsFloatText}>
+            {totalPoints} words
+          </Text>
+        </View>
+      )}
       <View style={{ flex: 1, width: '100%' }}>
         <ScrollView
           style={{ flex: 1, width: '100%' }}
@@ -646,11 +513,6 @@ const devResetWOTD = async () => {
           keyboardShouldPersistTaps="handled"
         >
           <View style={{ width: '100%', alignItems: 'center' }}>
-            {gameMode !== "freeplay" && gameMode !== "wordofday" && (
-              <View style={styles.pointsFloatBox}>
-                <Text style={styles.pointsFloatText}>{totalPoints} pts</Text>
-              </View>
-            )}
             <View style={{ width: '100%', alignItems: 'center' }}>
               <Board
                 guesses={guesses}
@@ -665,20 +527,41 @@ const devResetWOTD = async () => {
               <TouchableOpacity
                 style={[
                   styles.hintBtn,
-                  (gameMode === "freeplay" && guesses.length < 4) || (gameMode === "wordofday" && guesses.length < 4) ? styles.hintBtnDisabled : undefined
+                  (
+                    (gameMode === "freeplay" && guesses.length < 4) ||
+                    (gameMode === "wordofday" && guesses.length < 4) ||
+                    (gameMode === "timed" && timeLeft > synonymsUnlockAt)
+                  ) ? styles.hintBtnDisabled : undefined
                 ]}
                 onPress={handleSynonymsPress}
-                disabled={(gameMode === "freeplay" && guesses.length < 4) || (gameMode === "wordofday" && guesses.length < 4)}
-                activeOpacity={((gameMode === "freeplay" && guesses.length < 4) || (gameMode === "wordofday" && guesses.length < 4)) ? 1 : 0.7}
+                disabled={
+                  (gameMode === "freeplay" && guesses.length < 4) ||
+                  (gameMode === "wordofday" && guesses.length < 4) ||
+                  (gameMode === "timed" && timeLeft > synonymsUnlockAt)
+                }
+                activeOpacity={
+                  ((gameMode === "freeplay" && guesses.length < 4) ||
+                  (gameMode === "wordofday" && guesses.length < 4) ||
+                  (gameMode === "timed" && timeLeft > synonymsUnlockAt)) ? 1 : 0.7
+                }
               >
                 <Text
                   style={[
                     styles.hintText,
-                    (gameMode === "freeplay" && guesses.length < 4) || (gameMode === "wordofday" && guesses.length < 4) ? styles.hintTextDisabled : undefined
+                    (
+                      (gameMode === "freeplay" && guesses.length < 4) ||
+                      (gameMode === "wordofday" && guesses.length < 4) ||
+                      (gameMode === "timed" && timeLeft > synonymsUnlockAt)
+                    ) ? styles.hintTextDisabled : undefined
                   ]}
                 >
                   Synonyms
                 </Text>
+                {gameMode === "timed" && timeLeft > synonymsUnlockAt && (
+                  <Text style={styles.unlocksText}>
+                    unlocks in {Math.max(0, Math.ceil(timeLeft - synonymsUnlockAt))}s
+                  </Text>
+                )}
                 {((gameMode === "freeplay" || gameMode === "wordofday") && guesses.length < 4) && (
                   <Text style={styles.unlocksText}>
                     unlocks in {4 - guesses.length} {4 - guesses.length === 1 ? "try" : "tries"}
@@ -689,26 +572,48 @@ const devResetWOTD = async () => {
               <TouchableOpacity
                 style={[
                   styles.hintBtn,
-                  (gameMode === "freeplay" && guesses.length < 5) || (gameMode === "wordofday" && guesses.length < 5) ? styles.hintBtnDisabled : undefined
+                  (
+                    (gameMode === "freeplay" && guesses.length < 5) ||
+                    (gameMode === "wordofday" && guesses.length < 5) ||
+                    (gameMode === "timed" && timeLeft > definitionUnlockAt)
+                  ) ? styles.hintBtnDisabled : undefined
                 ]}
                 onPress={handleDefinitionPress}
-                disabled={(gameMode === "freeplay" && guesses.length < 5) || (gameMode === "wordofday" && guesses.length < 5)}
-                activeOpacity={((gameMode === "freeplay" && guesses.length < 5) || (gameMode === "wordofday" && guesses.length < 5)) ? 1 : 0.7}
+                disabled={
+                  (gameMode === "freeplay" && guesses.length < 5) ||
+                  (gameMode === "wordofday" && guesses.length < 5) ||
+                  (gameMode === "timed" && timeLeft > definitionUnlockAt)
+                }
+                activeOpacity={
+                  ((gameMode === "freeplay" && guesses.length < 5) ||
+                  (gameMode === "wordofday" && guesses.length < 5) ||
+                  (gameMode === "timed" && timeLeft > definitionUnlockAt)) ? 1 : 0.7
+                }
               >
                 <Text
                   style={[
                     styles.hintText,
-                    (gameMode === "freeplay" && guesses.length < 5) || (gameMode === "wordofday" && guesses.length < 5) ? styles.hintTextDisabled : undefined
+                    (
+                      (gameMode === "freeplay" && guesses.length < 5) ||
+                      (gameMode === "wordofday" && guesses.length < 5) ||
+                      (gameMode === "timed" && timeLeft > definitionUnlockAt)
+                    ) ? styles.hintTextDisabled : undefined
                   ]}
                 >
                   Definition
                 </Text>
+                {gameMode === "timed" && timeLeft > definitionUnlockAt && (
+                  <Text style={styles.unlocksText}>
+                    unlocks in {Math.max(0, Math.ceil(timeLeft - definitionUnlockAt))}s
+                  </Text>
+                )}
                 {((gameMode === "freeplay" || gameMode === "wordofday") && guesses.length < 5) && (
                   <Text style={styles.unlocksText}>
                     unlocks in {5 - guesses.length} {5 - guesses.length === 1 ? "try" : "tries"}
                   </Text>
                 )}
               </TouchableOpacity>
+
             </View>
           </View>
         </ScrollView>
@@ -721,45 +626,31 @@ const devResetWOTD = async () => {
           />
         </View>
       </View>
-      {/* Modal for win/lose */}
-      <AnimatedModal visible={showEndModal} onRequestClose={() => setShowEndModal(false)} isDark={isDark}>
-        <Text style={[modalStyles.title, { color: isDark ? '#fff' : '#111' }]}>{endMsg}</Text>
-        {gameMode === "freeplay" || gameMode === "wordofday" || gameMode === "timed" ? (
-          <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 12 }}>
-            <TouchableOpacity style={[modalStyles.closeBtn, { marginRight: 10 }]} onPress={handleRestart}>
-              <Text style={modalStyles.closeTxt}>Next</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={modalStyles.closeBtn} onPress={onGoHome}>
-              <Text style={modalStyles.closeTxt}>Menu</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity style={modalStyles.closeBtn} onPress={handleRestart}>
-            <Text style={modalStyles.closeTxt}>Restart</Text>
-          </TouchableOpacity>
-        )}
-      </AnimatedModal>
-      <AnimatedModal visible={showSynModal} onRequestClose={() => setShowSynModal(false)} isDark={isDark}>
-        <Text style={[modalStyles.title, { color: isDark ? '#fff' : '#111' }]}>Synonyms</Text>
-        <View style={modalStyles.content}>
-          {synonymsList.length === 0
-            ? <Text style={[modalStyles.text, { color: isDark ? '#eee' : '#111' }]}>No synonyms found.</Text>
-            : synonymsList.map((s, i) => (
-                <Text key={i} style={[modalStyles.text, { color: isDark ? '#eee' : '#111' }]}>• {s}</Text>
-              ))
-          }
-        </View>
-        <TouchableOpacity style={modalStyles.closeBtn} onPress={() => setShowSynModal(false)}>
-          <Text style={modalStyles.closeTxt}>Close</Text>
-        </TouchableOpacity>
-      </AnimatedModal>
-      <AnimatedModal visible={showDefModal} onRequestClose={() => setShowDefModal(false)} isDark={isDark}>
-        <Text style={[modalStyles.title, { color: isDark ? '#fff' : '#111' }]}>Definition</Text>
-        <View style={modalStyles.content}><Text style={[modalStyles.text, { color: isDark ? '#eee' : '#111' }]}>{definitionText}</Text></View>
-        <TouchableOpacity style={modalStyles.closeBtn} onPress={() => setShowDefModal(false)}>
-          <Text style={modalStyles.closeTxt}>Close</Text>
-        </TouchableOpacity>
-      </AnimatedModal>
+      <EndgameModal
+        visible={showEndModal}
+        isDark={isDark}
+        endMsg={endMsg}
+        gameMode={gameMode}
+        onRestart={handleRestart}
+        onGoHome={onGoHome}
+        onRequestClose={() => setShowEndModal(false)}
+      />
+      <HintModal
+        visible={showSynModal}
+        isDark={isDark}
+        title="Synonyms"
+        contentList={synonymsList}
+        onClose={() => setShowSynModal(false)}
+      />
+
+      <HintModal
+        visible={showDefModal}
+        isDark={isDark}
+        title="Definition"
+        contentList={[definitionText]}
+        onClose={() => setShowDefModal(false)}
+      />
+
       {confetti && <ConfettiCannon count={150} origin={{ x: width/2, y: 0 }} fadeOut />}
       {(simulateNetworkError || networkErrorDetected) && (
         <Animated.View style={[styles.floatingNetworkError, { opacity: 1 }]}>
@@ -771,8 +662,6 @@ const devResetWOTD = async () => {
     </SafeAreaView>
   )
 }
-
-
 
 const styles = StyleSheet.create({
   container:    { flex:1 },

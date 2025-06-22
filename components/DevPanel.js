@@ -14,6 +14,12 @@ export default function DevPanel({
 }) {
   const [visible, setVisible] = useState(false);
 
+  // Helper to wrap any action to also close the panel
+  const handleDevAction = (fn) => () => {
+    fn && fn();
+    setVisible(false);
+  };
+
   return (
     <View style={styles.inlineContainer}>
       <TouchableOpacity
@@ -26,31 +32,30 @@ export default function DevPanel({
       {visible && (
         <View style={styles.panel}>
           <Text style={styles.panelTitle}>DEV PANEL</Text>
-          <TouchableOpacity style={styles.devButton} onPress={onDevResetPoints}>
+          <TouchableOpacity style={styles.devButton} onPress={handleDevAction(onDevResetPoints)}>
             <Text style={styles.devText}>Reset Points</Text>
           </TouchableOpacity>
-          {/* New: Reset WOTD button */}
           {onDevResetWOTD && (
-            <TouchableOpacity style={styles.devButton} onPress={onDevResetWOTD}>
+            <TouchableOpacity style={styles.devButton} onPress={handleDevAction(onDevResetWOTD)}>
               <Text style={styles.devText}>Reset Word of the Day</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.devButton} onPress={onDevRevealAnswer}>
+          <TouchableOpacity style={styles.devButton} onPress={handleDevAction(onDevRevealAnswer)}>
             <Text style={styles.devText}>Reveal Answer</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.devButton} onPress={onDevAutofillBoard}>
+          <TouchableOpacity style={styles.devButton} onPress={handleDevAction(onDevAutofillBoard)}>
             <Text style={styles.devText}>Autofill Board (5 rows)</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.devButton} onPress={onAutoWin6}>
+          <TouchableOpacity style={styles.devButton} onPress={handleDevAction(onAutoWin6)}>
             <Text style={styles.devText}>Auto Win in 6</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.devButton} onPress={onDevForceLose}>
+          <TouchableOpacity style={styles.devButton} onPress={handleDevAction(onDevForceLose)}>
             <Text style={styles.devText}>Force Lose</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.devButton} onPress={onDevRestart}>
+          <TouchableOpacity style={styles.devButton} onPress={handleDevAction(onDevRestart)}>
             <Text style={styles.devText}>Restart Game</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.devButton} onPress={onSimulateNetworkError}>
+          <TouchableOpacity style={styles.devButton} onPress={handleDevAction(onSimulateNetworkError)}>
             <Text style={styles.devText}>Simulate Network Error</Text>
           </TouchableOpacity>
         </View>
