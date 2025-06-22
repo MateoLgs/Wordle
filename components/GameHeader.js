@@ -14,6 +14,7 @@ export default function GameHeader({
   onDevRestart,
   onAutoWin6,
   onSimulateNetworkError,
+  onDevResetWOTD, // <-- Add here
 }) {
   const systemColorScheme = useColorScheme();
   const isDark = (theme === 'system' ? systemColorScheme : theme) === 'dark';
@@ -36,7 +37,7 @@ export default function GameHeader({
       {/* Spacer */}
       <View style={{ flex: 1 }} />
 
-      {/* DevPanel button (no absolute/relative, just a normal icon) */}
+      {/* DevPanel button */}
       {__DEV__ && (
         <DevPanel
           onDevResetPoints={onDevResetPoints}
@@ -46,6 +47,7 @@ export default function GameHeader({
           onDevRestart={onDevRestart}
           onAutoWin6={onAutoWin6}
           onSimulateNetworkError={onSimulateNetworkError}
+          onDevResetWOTD={onDevResetWOTD} // <-- Pass here!
           inline
         />
       )}

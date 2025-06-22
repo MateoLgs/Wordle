@@ -8,7 +8,7 @@ import MainGame from './screens/MainGame';
 
 export default function App() {
   const [settings, setSettings] = useState(null); // { mode, language }
-  const [theme, setTheme] = useState('system');
+  const [theme, setTheme] = useState('dark');
 
   useEffect(() => {
     SystemUI.setBackgroundColorAsync('transparent');

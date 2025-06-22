@@ -9,6 +9,7 @@ export default function DevPanel({
   onDevRestart,
   onAutoWin6,
   onSimulateNetworkError,
+  onDevResetWOTD, // <-- Add this prop!
   inline,
 }) {
   const [visible, setVisible] = useState(false);
@@ -28,6 +29,12 @@ export default function DevPanel({
           <TouchableOpacity style={styles.devButton} onPress={onDevResetPoints}>
             <Text style={styles.devText}>Reset Points</Text>
           </TouchableOpacity>
+          {/* New: Reset WOTD button */}
+          {onDevResetWOTD && (
+            <TouchableOpacity style={styles.devButton} onPress={onDevResetWOTD}>
+              <Text style={styles.devText}>Reset Word of the Day</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.devButton} onPress={onDevRevealAnswer}>
             <Text style={styles.devText}>Reveal Answer</Text>
           </TouchableOpacity>

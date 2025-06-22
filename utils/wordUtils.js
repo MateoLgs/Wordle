@@ -78,7 +78,15 @@ export async function validateWord(word, normalizedSet, lang, simulateNetworkErr
   if (lang === 'en') {
     try {
       const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word.toLowerCase()}`);
-      if (!res.ok) throw new Error("Network or word not found");
+      if (res.status === 404) {
+        // Word not found, NOT a network error!
+        return false;
+      }
+      if (!res.ok) {
+        // Network/server error (e.g. 5xx)
+        if (onNetworkError) onNetworkError();
+        return false;
+      }
       const data = await res.json();
       return Array.isArray(data) && data.length > 0;
     } catch (err) {
@@ -93,7 +101,14 @@ export async function validateWord(word, normalizedSet, lang, simulateNetworkErr
       const res = await fetch(
         `https://api.languagetool.org/v2/check?language=${lang}&text=${word}`
       );
-      if (!res.ok) throw new Error("Network or word not found");
+      if (res.status === 404) {
+        // Not found (should almost never happen for LanguageTool), treat as not valid
+        return false;
+      }
+      if (!res.ok) {
+        if (onNetworkError) onNetworkError();
+        return false;
+      }
       const data = await res.json();
       // If no spelling mistakes, accept
       const hasSpellingMistake = data.matches.some(
@@ -109,3 +124,4 @@ export async function validateWord(word, normalizedSet, lang, simulateNetworkErr
   // Fallback: Not valid
   return false;
 }
+
