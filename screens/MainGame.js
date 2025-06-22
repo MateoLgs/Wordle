@@ -12,12 +12,15 @@ import {
   Alert,
 } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { getDailyWordForBank, getTodayKey } from '../utils/gameHelpers';
+
 import {
   mergeLetterStatuses,
   getSynonymsLocal,
   getDefinitionLocal
 } from '../utils/gameLogic';
 import { useGameTimer } from '../hooks/useGameTimer';
+import { getLocalSynonyms, getLocalDefinition } from '../utils/hintUtils';
 
 import Board from '../components/Board'
 import Keyboard from '../components/Keyboard'
@@ -34,29 +37,29 @@ import { NUM_ROWS, STATUS } from '../utils/constants'
 import { ALL_WORD_BANKS } from '../assets/wordBanks'
 import ConfettiCannon from 'react-native-confetti-cannon'
 
-const POINTS_KEY = '@totalPoints'
+// Points/penalties logic from utils
+import {
+  getSynonymsUnlockAt,
+  getDefinitionUnlockAt,
+  getSynPenalty,
+  getDefPenalty,
+} from '../utils/gamePoints'
 
-function getDailyWordForBank(bank) {
-  if (!bank.length) return '';
-  const now = new Date();
-  const start = new Date(2020, 0, 1);
-  const daysSince = Math.floor((now - start) / (1000 * 60 * 60 * 24));
-  const index = daysSince % bank.length;
-  return bank[index].word.toUpperCase();
-}
-function getTodayKey(lang) {
-  const today = new Date();
-  const y = today.getFullYear();
-  const m = (today.getMonth() + 1).toString().padStart(2, "0");
-  const d = today.getDate().toString().padStart(2, "0");
-  return `@wotd-${lang}-${y}-${m}-${d}`;
-}
+// NEW: Import dev helpers hook
+import { useDevHelpers } from '../hooks/useDevHelpers'
+
+const POINTS_KEY = '@totalPoints'
 
 export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 'system', setTheme }) {
   const systemColorScheme = useColorScheme();
   const activeTheme = theme === 'system' ? systemColorScheme : theme;
   const isDark = activeTheme === 'dark';
 
+  const INITIAL_SECONDS = 180; // <-- Adjust here for timed mode length
+
+  // Unlock thresholds based on initial timer duration
+  const synonymsUnlockAt = getSynonymsUnlockAt(INITIAL_SECONDS);
+  const definitionUnlockAt = getDefinitionUnlockAt(INITIAL_SECONDS);
 
   const [bank, setBank]                   = useState([])
   const [normalizedSet, setNormalizedSet] = useState(new Set())
@@ -96,23 +99,18 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
 
   // Timer
   const onTimeout = useCallback(() => {
-    setEndMsg(`⏰ Time's up!\nWords finished: ${totalPoints}`);
+    setEndMsg(`⏰ Time's up!\nWords found: ${totalPoints}`);
     setGameOver(true);
     setShowEndModal(true);
     setTotalPoints(0); // RESET POINTS ON TIMEOUT!
     AsyncStorage.setItem(POINTS_KEY, '0');
   }, [totalPoints]);
-  const INITIAL_SECONDS = 60; // or 60, but use a variable for flexibility!
-// Calculate unlock thresholds based on initial time
-  const synonymsUnlockAt = Math.round(INITIAL_SECONDS * 0.35); // After 65% elapsed (so when timeLeft <= this)
-  const definitionUnlockAt = Math.round(INITIAL_SECONDS * 0.20); // After 80% elapsed (so when timeLeft <= this)
   const [timeLeft] = useGameTimer({
     mode: gameMode,
     isActive: !gameOver,
     initialSeconds: INITIAL_SECONDS,
     onTimeout,
   });
-
 
   const { width } = Dimensions.get('window')
   const containerWidth = width * 0.95;
@@ -200,9 +198,28 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
     return () => clearTimeout(timer);
   }, [gameOver, endMsg, freshWin]);
 
-  const rowVal     = NUM_ROWS - guesses.length
-  const synPenalty = synonymsUsed   ? 0 : 4 * rowVal * rowVal
-  const defPenalty = definitionUsed ? 0 : 2 * rowVal * rowVal
+  // Penalty calculations and hint unlock logic now use utility functions
+  const rowVal = NUM_ROWS - guesses.length;
+  const synPenalty = getSynPenalty(rowVal, synonymsUsed);
+  const defPenalty = getDefPenalty(rowVal, definitionUsed);
+
+  // -----
+  // DEV HELPERS via HOOK:
+  const devHelpers = useDevHelpers({
+    bank,
+    target, setTarget,
+    setGuesses, setStatuses, setCurrent,
+    setGameOver, setEndMsg, setLastScore, setShowEndModal,
+    setFreshWin, setShowDevPanel,
+    setReveal,
+    setConfetti, setNetworkErrorDetected,
+    setWotdCompleted, setWotdLoaded,
+    setPenalties, setSynonymsUsed, setDefinitionUsed,
+    setValidating,
+    currentLanguage, gameMode,
+    handleRestart, resetPoints
+  });
+  // -----
 
   const handleSynonymsPress = async () => {
     setShowSynModal(true);
@@ -210,8 +227,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
       setPenalties(p => p + synPenalty)
       setSynonymsUsed(true)
     }
-    const local = getSynonymsLocal(target, bank);
-    setSynonymsList(local);
+    setSynonymsList(getLocalSynonyms(target, bank));
   };
 
   const handleDefinitionPress = async () => {
@@ -220,9 +236,9 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
       setPenalties(p => p + defPenalty)
       setDefinitionUsed(true)
     }
-    const local = getDefinitionLocal(target, bank);
-    setDefinitionText(local);
+    setDefinitionText(getLocalDefinition(target, bank));
   };
+
 
   const handleKeyPress = async key => {
     if ((gameMode === "timed" && (gameOver || timeLeft <= 0))) return;
@@ -261,7 +277,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
       setCurrent('')
       let isWin = sts.every(s => s === STATUS.CORRECT);
 
-      // --- TIMED MODE POINTS HANDLING ---
+      // --- TIMED MODE WIN/LOSS HANDLING ---
       if (gameMode === "timed") {
         if (isWin) {
           setTimeout(() => {
@@ -291,7 +307,6 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
           return;
         }
       }
-
 
       // --- Other modes: normal win/lose and popup ---
       if (isWin) {
@@ -340,118 +355,6 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
     setFreshWin(false);
   }
 
-  // --- Dev helpers ---
-  const devAutofillBoard = () => {
-    if (!bank.length) return;
-    const fillerWords = bank
-      .map(w => w.word.toUpperCase())
-      .filter(w => w !== target)
-      .slice(0, NUM_ROWS - 1);
-    const entries = fillerWords.map(word => {
-      const gNorm = stripAccents(word).toUpperCase();
-      const tNorm = stripAccents(target).toUpperCase();
-      const sts = evaluateGuess(gNorm, tNorm);
-      return { letters: word.split(''), statuses: sts };
-    });
-    const allStatuses = entries.reduce((acc, e) => mergeLetterStatuses(acc, e), {});
-    setGuesses(entries);
-    setStatuses(allStatuses);
-    setCurrent('');
-    setGameOver(false);
-    setEndMsg('');
-    setLastScore(null);
-    setShowEndModal(false);
-    setFreshWin(false);
-    setShowDevPanel(false);
-  };
-  const devAutoWin6 = () => {
-    if (!bank.length) return;
-    const fillerWords = bank
-      .map(w => w.word.toUpperCase())
-      .filter(w => w !== target)
-      .slice(0, NUM_ROWS - 1);
-    const entries = fillerWords.map(word => {
-      const gNorm = stripAccents(word).toUpperCase();
-      const tNorm = stripAccents(target).toUpperCase();
-      const sts = evaluateGuess(gNorm, tNorm);
-      return { letters: word.split(''), statuses: sts };
-    });
-    const winEntry = {
-      letters: target.split(''),
-      statuses: Array(target.length).fill(STATUS.CORRECT)
-    };
-    const finalGuesses = [...entries, winEntry];
-    const allStatuses = finalGuesses.reduce((acc, e) => mergeLetterStatuses(acc, e), {});
-    setGuesses(finalGuesses);
-    setStatuses(allStatuses);
-    setCurrent('');
-    setGameOver(true);
-    setEndMsg('🎉 Auto Win');
-    setLastScore(0);
-    setShowEndModal(true);
-    setFreshWin(false);
-    setShowDevPanel(false);
-  };
-  const devForceLose = () => {
-    if (!bank.length) return;
-    const wrongs = bank
-      .map(w => w.word.toUpperCase())
-      .filter(w => w !== target)
-      .slice(0, NUM_ROWS);
-    const entries = wrongs.map(word => {
-      const gNorm = stripAccents(word).toUpperCase();
-      const tNorm = stripAccents(target).toUpperCase();
-      const sts = evaluateGuess(gNorm, tNorm);
-      return { letters: word.split(''), statuses: sts }
-    }).slice(0, NUM_ROWS);
-    const allStatuses = entries.reduce((acc, e) => mergeLetterStatuses(acc, e), {});
-    setGuesses(entries);
-    setStatuses(allStatuses);
-    setCurrent('');
-    setGameOver(true);
-    setEndMsg('😞 Auto Lose');
-    setLastScore(0);
-    setShowEndModal(true);
-    setFreshWin(false);
-    setShowDevPanel(false);
-  };
-  const devRevealAnswer = () => {
-    setReveal(true)
-    Alert.alert('Answer', target)
-    setShowDevPanel(false);
-  };
-  const devRestart = () => {
-    handleRestart();
-    setShowDevPanel(false);
-  };
-  const devSimulateNetworkError = () => {
-    setSimulateNetworkError(x => !x);
-    setShowDevPanel(false);
-  };
-  const devResetWOTD = async () => {
-    if (gameMode !== "wordofday") return;
-    const todayKey = getTodayKey(currentLanguage);
-    await AsyncStorage.removeItem(todayKey);
-    setWotdCompleted(false);
-    setShowEndModal(false);
-    setGameOver(false);
-    setFreshWin(false);
-    const b = ALL_WORD_BANKS[currentLanguage] || [];
-    const word = getDailyWordForBank(b);
-    setTarget(word);
-    setGuesses([]); setCurrent(''); setStatuses({});
-    setLastScore(null); setReveal(false);
-    setPenalties(0); setSynonymsUsed(false); setDefinitionUsed(false);
-    setConfetti(false); setNetworkErrorDetected(false);
-    setWotdCompleted(false);
-    setWotdLoaded(true);
-    setShowDevPanel(false);
-  };
-  const devResetPointsWrapped = async () => {
-    await resetPoints();
-    setShowDevPanel(false);
-  }
-
   const modeLabel = (
     gameMode === "freeplay" ? "Freeplay" :
     gameMode === "timed" ? "Timed" :
@@ -474,14 +377,14 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
         modeLabel={modeLabel}
         theme={theme}
         setTheme={setTheme}
-        onDevResetPoints={devResetPointsWrapped}
-        onDevRevealAnswer={devRevealAnswer}
-        onDevAutofillBoard={devAutofillBoard}
-        onDevForceLose={devForceLose}
-        onDevRestart={devRestart}
-        onAutoWin6={devAutoWin6}
-        onSimulateNetworkError={devSimulateNetworkError}
-        onDevResetWOTD={devResetWOTD}
+        onDevResetPoints={devHelpers.devResetPointsWrapped}
+        onDevRevealAnswer={devHelpers.devRevealAnswer}
+        onDevAutofillBoard={devHelpers.devAutofillBoard}
+        onDevForceLose={devHelpers.devForceLose}
+        onDevRestart={devHelpers.devRestart}
+        onAutoWin6={devHelpers.devAutoWin6}
+        onSimulateNetworkError={devHelpers.devSimulateNetworkError}
+        onDevResetWOTD={devHelpers.devResetWOTD}
         showDevPanel={showDevPanel}
         setShowDevPanel={setShowDevPanel}
       />
@@ -506,6 +409,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
           </Text>
         </View>
       )}
+
       <View style={{ flex: 1, width: '100%' }}>
         <ScrollView
           style={{ flex: 1, width: '100%' }}
@@ -524,6 +428,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
               />
             </View>
             <View style={styles.buttonRow}>
+              {/* Synonyms */}
               <TouchableOpacity
                 style={[
                   styles.hintBtn,
@@ -568,7 +473,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
                   </Text>
                 )}
               </TouchableOpacity>
-
+              {/* Definition */}
               <TouchableOpacity
                 style={[
                   styles.hintBtn,
@@ -613,7 +518,6 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
                   </Text>
                 )}
               </TouchableOpacity>
-
             </View>
           </View>
         </ScrollView>
@@ -642,7 +546,6 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
         contentList={synonymsList}
         onClose={() => setShowSynModal(false)}
       />
-
       <HintModal
         visible={showDefModal}
         isDark={isDark}
