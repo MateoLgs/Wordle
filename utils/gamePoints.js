@@ -9,7 +9,7 @@
 export function getSynonymsUnlockAt(initialSeconds) {
   // Unlock after 65% of the timer has passed.
   // i.e. 35% remaining.
-  return Math.floor(initialSeconds * 0.35);
+  return Math.floor(initialSeconds * 0.25);
 }
 
 /**
@@ -21,7 +21,7 @@ export function getSynonymsUnlockAt(initialSeconds) {
 export function getDefinitionUnlockAt(initialSeconds) {
   // Unlock after 80% of the timer has passed.
   // i.e. 20% remaining.
-  return Math.floor(initialSeconds * 0.20);
+  return Math.floor(initialSeconds * 0.15);
 }
 
 /**

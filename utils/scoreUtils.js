@@ -4,14 +4,15 @@
  * Scoring configuration constants.
  * Adjust these values to change how many points each factor is worth.
  */
-const BASE_POINTS_PER_LETTER = 10;           // Base points per letter in the target word
-const WIN_BONUS = 50;                        // Flat bonus for winning at all
-const GUESS_PENALTY = 5;                     // Penalty per guess taken
-const BONUS_PER_UNUSED_GUESS = 10;           // Bonus per unused guess (i.e. if maxAttempts=6 and used=4, unused=2 → 2 * this)
-const TIME_BONUS_THRESHOLD = 60;             // In seconds: if timeTaken < this, award TIME_BONUS
-const TIME_BONUS = 20;                       // Flat time bonus if under threshold
-const STREAK_MULTIPLIER = 0.05;               // 5% extra points per current win streak
-const HARD_MODE_MULTIPLIER = 1.2;             // 20% additional multiplier if in hard mode
+const BASE_POINTS_PER_LETTER = 10;          // Base points per letter in the target word
+const WIN_BONUS = 50;                       // Flat bonus for winning at all
+const GUESS_PENALTY = 5;                    // Penalty per guess taken
+const BONUS_PER_UNUSED_GUESS = 10;          // Bonus per unused guess (i.e. if maxAttempts=6 and used=4, unused=2 → 2 * this)
+const TIME_BONUS_THRESHOLD = 60;            // In seconds: if timeTaken < this, award TIME_BONUS
+const TIME_BONUS = 20;                      // Flat time bonus if under threshold
+const STREAK_MULTIPLIER = 0.01;             // **1% extra points per current win streak (was 5%)**
+const MAX_STREAK_FOR_BONUS = 20;            // **Cap streak multiplier at 20**
+const HARD_MODE_MULTIPLIER = 1.2;           // 20% additional multiplier if in hard mode
 
 /**
  * calculateScore
@@ -41,7 +42,6 @@ export function calculateScore({
   let total = 0;
 
   // 1) Base points for word length
-  //    E.g., a 5-letter word yields (5 * BASE_POINTS_PER_LETTER) = 50 base points.
   const baseWordPoints = wordLength * BASE_POINTS_PER_LETTER;
   total += baseWordPoints;
 
@@ -58,9 +58,10 @@ export function calculateScore({
       total += TIME_BONUS;
     }
 
-    // 5) Streak multiplier
+    // 5) Streak multiplier (capped)
     if (currentStreak && currentStreak > 0) {
-      total *= 1 + currentStreak * STREAK_MULTIPLIER;
+      const effectiveStreak = Math.min(currentStreak, MAX_STREAK_FOR_BONUS); // Cap at 20
+      total *= 1 + effectiveStreak * STREAK_MULTIPLIER;
     }
 
     // 6) Hard‐mode multiplier
@@ -69,10 +70,6 @@ export function calculateScore({
     }
   } else {
     //  Loss branch: penalize for failing and deduct points per guess.
-    //  You might choose to not give any base points on a loss (uncomment next line if so):
-    //  total = 0;
-
-    //  Penalty per guess taken (i.e., if they used all attempts and lost, attemptsUsed = maxAttempts)
     total -= attemptsUsed * GUESS_PENALTY;
 
     //  If you want to enforce a minimum of zero points:
@@ -111,4 +108,3 @@ export function calculateScore({
  * });
  * console.log("Points earned (loss):", scoreLoss);
  */
-

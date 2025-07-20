@@ -1,1 +1,2 @@
-some words (noms propres for example), are not found so cannot be guesses (canadian)
+display best score ever timed and streak game mode
+time mode seulement 10 secondes

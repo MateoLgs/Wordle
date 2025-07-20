@@ -9,10 +9,8 @@ import {
   StyleSheet,
   useColorScheme,
   ScrollView,
-  Alert,
 } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { getDailyWordForBank, getTodayKey } from '../utils/gameHelpers';
 
 import {
   mergeLetterStatuses,
@@ -20,7 +18,6 @@ import {
   getDefinitionLocal
 } from '../utils/gameLogic';
 import { useGameTimer } from '../hooks/useGameTimer';
-import { getLocalSynonyms, getLocalDefinition } from '../utils/hintUtils';
 
 import Board from '../components/Board'
 import Keyboard from '../components/Keyboard'
@@ -37,27 +34,27 @@ import { NUM_ROWS, STATUS } from '../utils/constants'
 import { ALL_WORD_BANKS } from '../assets/wordBanks'
 import ConfettiCannon from 'react-native-confetti-cannon'
 
-// Points/penalties logic from utils
+import { useDevHelpers } from '../hooks/useDevHelpers'
 import {
   getSynonymsUnlockAt,
   getDefinitionUnlockAt,
   getSynPenalty,
   getDefPenalty,
 } from '../utils/gamePoints'
-
-// NEW: Import dev helpers hook
-import { useDevHelpers } from '../hooks/useDevHelpers'
+import { getDailyWordForBank, getTodayKey } from '../utils/gameHelpers'
+import { calculateScore } from '../utils/scoreUtils'
 
 const POINTS_KEY = '@totalPoints'
+const BEST_TIMED_SCORE_KEY = '@bestTimedScore'
+const BEST_STREAK_SCORE_KEY = '@bestStreakScore'
 
 export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 'system', setTheme }) {
   const systemColorScheme = useColorScheme();
   const activeTheme = theme === 'system' ? systemColorScheme : theme;
   const isDark = activeTheme === 'dark';
 
-  const INITIAL_SECONDS = 180; // <-- Adjust here for timed mode length
+  const INITIAL_SECONDS = 120;
 
-  // Unlock thresholds based on initial timer duration
   const synonymsUnlockAt = getSynonymsUnlockAt(INITIAL_SECONDS);
   const definitionUnlockAt = getDefinitionUnlockAt(INITIAL_SECONDS);
 
@@ -94,17 +91,53 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
   const [freshWin, setFreshWin]           = useState(false);
   const [wordCount, setWordCount]         = useState(1);
 
-  // DevPanel open/close state
   const [showDevPanel, setShowDevPanel] = useState(false);
 
-  // Timer
-  const onTimeout = useCallback(() => {
-    setEndMsg(`⏰ Time's up!\nWords found: ${totalPoints}`);
+  // Track last target for modal (don't update until reset)
+  const [lastWord, setLastWord] = useState('');
+
+  // ---- ADVANCED POINTS FOR STREAK MODE ----
+  const [streakScore, setStreakScore] = useState(0);
+  const [lastStreakScore, setLastStreakScore] = useState(0);
+
+  // ---- HIGH SCORES ----
+  const [bestTimedScore, setBestTimedScore] = useState(0);
+  const [bestStreakScore, setBestStreakScore] = useState(0);
+
+  // Load high scores once on mount
+  useEffect(() => {
+    AsyncStorage.getItem(BEST_TIMED_SCORE_KEY).then(v => setBestTimedScore(v ? parseInt(v, 10) : 0));
+    AsyncStorage.getItem(BEST_STREAK_SCORE_KEY).then(v => setBestStreakScore(v ? parseInt(v, 10) : 0));
+    AsyncStorage.getItem(POINTS_KEY).then(v => {
+      if (v != null) setTotalPoints(parseInt(v,10))
+    })
+  }, []);
+
+  // Helpers for high scores
+  const tryUpdateTimedHighScore = useCallback(async (score) => {
+    if (score > bestTimedScore) {
+      setBestTimedScore(score);
+      await AsyncStorage.setItem(BEST_TIMED_SCORE_KEY, String(score));
+    }
+  }, [bestTimedScore]);
+
+  const tryUpdateStreakHighScore = useCallback(async (score) => {
+    if (score > bestStreakScore) {
+      setBestStreakScore(score);
+      await AsyncStorage.setItem(BEST_STREAK_SCORE_KEY, String(score));
+    }
+  }, [bestStreakScore]);
+
+  const onTimeout = useCallback(async () => {
+    setEndMsg(`⏰ Time's up!`);
     setGameOver(true);
     setShowEndModal(true);
-    setTotalPoints(0); // RESET POINTS ON TIMEOUT!
+    setLastWord(target);
+    await tryUpdateTimedHighScore(totalPoints);
+    setTotalPoints(0);
     AsyncStorage.setItem(POINTS_KEY, '0');
-  }, [totalPoints]);
+  }, [totalPoints, target, tryUpdateTimedHighScore]);
+
   const [timeLeft] = useGameTimer({
     mode: gameMode,
     isActive: !gameOver,
@@ -116,12 +149,6 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
   const containerWidth = width * 0.95;
   const tileSize   = target.length ? containerWidth / target.length : 48;
 
-  // Load persisted points on mount
-  useEffect(() => {
-    AsyncStorage.getItem(POINTS_KEY).then(v => {
-      if (v != null) setTotalPoints(parseInt(v,10))
-    })
-  }, [])
   const resetPoints = async () => {
     setTotalPoints(0)
     await AsyncStorage.setItem(POINTS_KEY, '0')
@@ -145,10 +172,11 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
       setConfetti(false); setNetworkErrorDetected(false);
       setFreshWin(false);
       setWotdLoaded(true);
+      setStreakScore(0);
+      setLastStreakScore(0);
       return;
     }
 
-    // --- Word of the Day (OFFLINE DETERMINISTIC) ---
     const todayKey = getTodayKey(currentLanguage);
     AsyncStorage.getItem(todayKey).then(async stored => {
       if (stored) {
@@ -164,7 +192,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
           setReveal(false);
           setCurrent('');
           setConfetti(false);
-          setFreshWin(false); // No confetti/modal on revisit
+          setFreshWin(false);
         } catch (err) {
           await AsyncStorage.removeItem(todayKey);
           setWotdCompleted(false);
@@ -172,7 +200,6 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
         setWotdLoaded(true);
         return;
       }
-      // Use deterministic word selection for WOTD
       const word = getDailyWordForBank(b);
       setTarget(word);
       setGuesses([]); setCurrent(''); setStatuses({});
@@ -198,13 +225,11 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
     return () => clearTimeout(timer);
   }, [gameOver, endMsg, freshWin]);
 
-  // Penalty calculations and hint unlock logic now use utility functions
   const rowVal = NUM_ROWS - guesses.length;
   const synPenalty = getSynPenalty(rowVal, synonymsUsed);
   const defPenalty = getDefPenalty(rowVal, definitionUsed);
 
-  // -----
-  // DEV HELPERS via HOOK:
+  // -- DEV HELPERS HOOK --
   const devHelpers = useDevHelpers({
     bank,
     target, setTarget,
@@ -219,7 +244,6 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
     currentLanguage, gameMode,
     handleRestart, resetPoints
   });
-  // -----
 
   const handleSynonymsPress = async () => {
     setShowSynModal(true);
@@ -227,7 +251,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
       setPenalties(p => p + synPenalty)
       setSynonymsUsed(true)
     }
-    setSynonymsList(getLocalSynonyms(target, bank));
+    setSynonymsList(getSynonymsLocal(target, bank));
   };
 
   const handleDefinitionPress = async () => {
@@ -236,9 +260,8 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
       setPenalties(p => p + defPenalty)
       setDefinitionUsed(true)
     }
-    setDefinitionText(getLocalDefinition(target, bank));
+    setDefinitionText(getDefinitionLocal(target, bank));
   };
-
 
   const handleKeyPress = async key => {
     if ((gameMode === "timed" && (gameOver || timeLeft <= 0))) return;
@@ -277,7 +300,53 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
       setCurrent('')
       let isWin = sts.every(s => s === STATUS.CORRECT);
 
-      // --- TIMED MODE WIN/LOSS HANDLING ---
+      // --- STREAK MODE ADVANCED POINTS with PENALTIES ---
+      if (gameMode === "streak") {
+        if (isWin) {
+          setTimeout(async () => {
+            let pointsThisWord = calculateScore({
+              isWin: true,
+              attemptsUsed: newG.length,
+              maxAttempts: NUM_ROWS,
+              wordLength: target.length,
+              timeTakenSeconds: null,
+              currentStreak: totalPoints,
+              isHardMode: false,
+            });
+
+            pointsThisWord -= penalties;
+            if (pointsThisWord < 0) pointsThisWord = 0;
+
+            setStreakScore(s => s + pointsThisWord);
+            setTotalPoints(tp => tp + 1); // streak count as words
+            setWordCount(wc => wc + 1);
+            if (bank.length) setTarget(bank[Math.floor(Math.random() * bank.length)].word.toUpperCase());
+            setGuesses([]); setCurrent(''); setStatuses({});
+            setLastScore(pointsThisWord);
+            setReveal(false);
+            setPenalties(0); setSynonymsUsed(false); setDefinitionUsed(false);
+            setConfetti(false); setNetworkErrorDetected(false);
+            setFreshWin(false);
+            setValidating(false);
+          }, 1200);
+          return;
+        } else if (newG.length === NUM_ROWS) {
+          setTimeout(async () => {
+            setLastWord(target);
+            setLastStreakScore(streakScore);
+            setEndMsg('😞 You lose');
+            setGameOver(true);
+            setShowEndModal(true);
+            await tryUpdateStreakHighScore(streakScore);
+            setTotalPoints(0);
+            setStreakScore(0);
+            AsyncStorage.setItem(POINTS_KEY, "0");
+          }, 1200);
+          return;
+        }
+      }
+
+      // --- TIMED MODE ---
       if (gameMode === "timed") {
         if (isWin) {
           setTimeout(() => {
@@ -297,10 +366,12 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
           }, 1200);
           return;
         } else if (newG.length === NUM_ROWS) {
-          setTimeout(() => {
-            setEndMsg(`😞 You lose\nWords found: ${totalPoints}`);
+          setTimeout(async () => {
+            setLastWord(target);
+            setEndMsg('😞 You lose');
             setGameOver(true);
             setShowEndModal(true);
+            await tryUpdateTimedHighScore(totalPoints);
             setTotalPoints(0);
             AsyncStorage.setItem(POINTS_KEY, "0");
           }, 1200);
@@ -342,7 +413,9 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
 
   const handleRestart = () => {
     setWordCount(1);
-    setTotalPoints(0); // Points reset only on full restart!
+    setTotalPoints(0);
+    setStreakScore(0);
+    setLastStreakScore(0);
     AsyncStorage.setItem(POINTS_KEY, '0');
     setGameOver(false);
     setShowEndModal(false);
@@ -353,13 +426,14 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
     setConfetti(false)
     setNetworkErrorDetected(false);
     setFreshWin(false);
+    setLastWord('');
   }
 
   const modeLabel = (
     gameMode === "freeplay" ? "Freeplay" :
     gameMode === "timed" ? "Timed" :
     gameMode === "wordofday" ? "Word of the Day" :
-    gameMode === "endless" ? "Endless" : ""
+    gameMode === "streak" ? "Streak" : ""
   );
 
   if (gameMode === "wordofday" && !wotdLoaded) {
@@ -373,7 +447,14 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#000000' : '#fff' }]}>
       <GameHeader
-        onGoHome={onGoHome}
+        onGoHome={() => {
+          setTotalPoints(0);
+          setStreakScore(0);
+          setLastStreakScore(0);
+          setLastWord('');
+          AsyncStorage.setItem(POINTS_KEY, '0');
+          onGoHome();
+        }}
         modeLabel={modeLabel}
         theme={theme}
         setTheme={setTheme}
@@ -389,7 +470,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
         setShowDevPanel={setShowDevPanel}
       />
 
-      {gameMode === "timed" && (
+      {["timed", "streak"].includes(gameMode) && (
         <View style={{ alignItems: 'center', marginTop: 10 }}>
           <Text style={{
             fontWeight: 'bold',
@@ -397,16 +478,30 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
             fontSize: 22,
             letterSpacing: 2
           }}>
-            {timeLeft}s  
+            {gameMode === "timed" ? `${timeLeft}s` : ""}
           </Text>
         </View>
       )}
 
-      {gameMode === "timed" && (
+      {["timed", "streak"].includes(gameMode) && (
         <View style={styles.pointsFloatBox}>
           <Text style={styles.pointsFloatText}>
-            {totalPoints} words
+            {gameMode === "streak"
+              ? `${streakScore} points`
+              : `${totalPoints} words`
+            }
           </Text>
+          {/* Show best score just below */}
+          {gameMode === "streak" && (
+            <Text style={styles.bestScoreText}>
+              Best: {bestStreakScore} pts
+            </Text>
+          )}
+          {gameMode === "timed" && (
+            <Text style={styles.bestScoreText}>
+              Best: {bestTimedScore} words
+            </Text>
+          )}
         </View>
       )}
 
@@ -435,7 +530,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
                   (
                     (gameMode === "freeplay" && guesses.length < 4) ||
                     (gameMode === "wordofday" && guesses.length < 4) ||
-                    (gameMode === "timed" && timeLeft > synonymsUnlockAt)
+                    (["timed", "streak"].includes(gameMode) && timeLeft > synonymsUnlockAt && gameMode !== "streak")
                   ) ? styles.hintBtnDisabled : undefined
                 ]}
                 onPress={handleSynonymsPress}
@@ -443,6 +538,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
                   (gameMode === "freeplay" && guesses.length < 4) ||
                   (gameMode === "wordofday" && guesses.length < 4) ||
                   (gameMode === "timed" && timeLeft > synonymsUnlockAt)
+                  // Note: in streak mode, always enabled!
                 }
                 activeOpacity={
                   ((gameMode === "freeplay" && guesses.length < 4) ||
@@ -462,17 +558,20 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
                 >
                   Synonyms
                 </Text>
-                {gameMode === "timed" && timeLeft > synonymsUnlockAt && (
+                {((gameMode === "freeplay" || gameMode === "wordofday") && guesses.length < 4
+                ) || (
+                  gameMode === "timed" && timeLeft > synonymsUnlockAt
+                ) ? (
                   <Text style={styles.unlocksText}>
-                    unlocks in {Math.max(0, Math.ceil(timeLeft - synonymsUnlockAt))}s
+                    unlocks in {
+                      (gameMode === "freeplay" || gameMode === "wordofday")
+                        ? (4 - guesses.length) + ((4 - guesses.length) === 1 ? " try" : " tries")
+                        : `${timeLeft - synonymsUnlockAt}s`
+                    }
                   </Text>
-                )}
-                {((gameMode === "freeplay" || gameMode === "wordofday") && guesses.length < 4) && (
-                  <Text style={styles.unlocksText}>
-                    unlocks in {4 - guesses.length} {4 - guesses.length === 1 ? "try" : "tries"}
-                  </Text>
-                )}
+                ) : null}
               </TouchableOpacity>
+
               {/* Definition */}
               <TouchableOpacity
                 style={[
@@ -480,7 +579,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
                   (
                     (gameMode === "freeplay" && guesses.length < 5) ||
                     (gameMode === "wordofday" && guesses.length < 5) ||
-                    (gameMode === "timed" && timeLeft > definitionUnlockAt)
+                    (["timed", "streak"].includes(gameMode) && timeLeft > definitionUnlockAt && gameMode !== "streak")
                   ) ? styles.hintBtnDisabled : undefined
                 ]}
                 onPress={handleDefinitionPress}
@@ -488,6 +587,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
                   (gameMode === "freeplay" && guesses.length < 5) ||
                   (gameMode === "wordofday" && guesses.length < 5) ||
                   (gameMode === "timed" && timeLeft > definitionUnlockAt)
+                  // Streak mode: always enabled!
                 }
                 activeOpacity={
                   ((gameMode === "freeplay" && guesses.length < 5) ||
@@ -507,16 +607,18 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
                 >
                   Definition
                 </Text>
-                {gameMode === "timed" && timeLeft > definitionUnlockAt && (
+                {((gameMode === "freeplay" || gameMode === "wordofday") && guesses.length < 5
+                ) || (
+                  gameMode === "timed" && timeLeft > definitionUnlockAt
+                ) ? (
                   <Text style={styles.unlocksText}>
-                    unlocks in {Math.max(0, Math.ceil(timeLeft - definitionUnlockAt))}s
+                    unlocks in {
+                      (gameMode === "freeplay" || gameMode === "wordofday")
+                        ? (5 - guesses.length) + ((5 - guesses.length) === 1 ? " try" : " tries")
+                        : `${timeLeft - definitionUnlockAt}s`
+                    }
                   </Text>
-                )}
-                {((gameMode === "freeplay" || gameMode === "wordofday") && guesses.length < 5) && (
-                  <Text style={styles.unlocksText}>
-                    unlocks in {5 - guesses.length} {5 - guesses.length === 1 ? "try" : "tries"}
-                  </Text>
-                )}
+                ) : null}
               </TouchableOpacity>
             </View>
           </View>
@@ -535,8 +637,20 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
         isDark={isDark}
         endMsg={endMsg}
         gameMode={gameMode}
+        words={totalPoints}
+        word={lastWord}
+        streakScore={lastStreakScore}
+        bestScore={gameMode === "streak" ? bestStreakScore : bestTimedScore}
+        achievedScore={gameMode === "streak" ? lastStreakScore : totalPoints}
         onRestart={handleRestart}
-        onGoHome={onGoHome}
+        onGoHome={() => {
+          setTotalPoints(0);
+          setStreakScore(0);
+          setLastStreakScore(0);
+          setLastWord('');
+          AsyncStorage.setItem(POINTS_KEY, '0');
+          onGoHome();
+        }}
         onRequestClose={() => setShowEndModal(false)}
       />
       <HintModal
@@ -546,6 +660,7 @@ export default function MainGame({ currentLanguage, gameMode, onGoHome, theme = 
         contentList={synonymsList}
         onClose={() => setShowSynModal(false)}
       />
+
       <HintModal
         visible={showDefModal}
         isDark={isDark}
@@ -578,12 +693,21 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(76,130,200,0.93)',
     borderWidth: 1.2,
     borderColor: '#fff',
+    alignItems: 'center'
   },
   pointsFloatText: {
     fontSize: 16,
     fontWeight: 'bold',
     letterSpacing: 1.1,
-    color: '#fff'
+    color: '#fff',
+    textAlign: 'center',
+  },
+  bestScoreText: {
+    color: '#ffaa44',
+    fontWeight: 'bold',
+    fontSize: 15,
+    textAlign: 'center',
+    marginTop: 3,
   },
   buttonRow:    { flexDirection:'row', justifyContent:'space-evenly', width:'100%', marginTop:8, marginBottom:10 },
   hintBtn: {
@@ -663,6 +787,6 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     backgroundColor: 'transparent',
-    marginBottom: '5%',
+    marginBottom: '1%',
   },
 });

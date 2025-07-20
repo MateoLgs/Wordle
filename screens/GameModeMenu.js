@@ -4,9 +4,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const GAME_MODES = [
   { key: 'freeplay', label: 'Freeplay', description: 'Unlimited classic games.', emoji: '🆓' },
-  { key: 'timed', label: 'Timed', description: '3 minutes, not one more.', emoji: '⏱️' },
+  { key: 'timed', label: 'Timed', description: '2 minutes, not one more.', emoji: '⏱️' },
   { key: 'wordofday', label: 'Word of the Day', description: 'One word, once per day.', emoji: '📅' },
-  { key: 'endless', label: 'Until You Lose', description: 'Streak: play until you fail!', emoji: '🔥' },
+  { key: 'streak', label: 'Until You Lose', description: 'Streak: play until you fail!', emoji: '🔥' },
 ];
 
 const LANGUAGES = [
